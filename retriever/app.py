@@ -1,61 +1,101 @@
 from dotenv import load_dotenv
 import os
 from langchain_community.graphs import Neo4jGraph
-from nomic import atlas  # Nomic Python API for embeddings
+from nomic import embed  # Nomic Python API for embeddings
 from neo4j import GraphDatabase
+import getpass
+from langchain_nomic import NomicEmbeddings
 
-# Load environment variables
+# Load environment variables from .env file
 load_dotenv()
 
-AURA_INSTANCENAME = os.environ["AURA_INSTANCENAME"]
-NEO4J_URI = os.environ["NEO4J_URI"]
-NEO4J_USERNAME = os.environ["NEO4J_USERNAME"]
-NEO4J_PASSWORD = os.environ["NEO4J_PASSWORD"]
-NEO4J_DATABASE = os.environ["NEO4J_DATABASE"]
+# Prompt for Nomic API key if it's not set in environment
+if not os.getenv("NOMIC_API_KEY"):
+    os.environ["NOMIC_API_KEY"] = getpass.getpass("Enter your Nomic API key: ")
 
-# Initialize Neo4j graph connection
-kg = Neo4jGraph(
-    url=NEO4J_URI,
-    username=NEO4J_USERNAME,
-    password=NEO4J_PASSWORD,
-    database=NEO4J_DATABASE,
-)
-
-# Initialize Nomic client (ensure API key is set)
+# Ensure Nomic API key is set
 nomic_api_key = os.getenv("NOMIC_API_KEY")
-atlas.login(nomic_api_key)  # Make sure you have your Nomic API key set in .env
+if not nomic_api_key:
+    raise ValueError("NOMIC_API_KEY is not set. Please provide a valid Nomic API key.")
+
+# Neo4j credentials
+NEO4J_URI = os.getenv("NEO4J_URI", "neo4j+s://49cf5700.databases.neo4j.io")  # Default URI for the database
+NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "<Username>")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "<Password>")
+
+if not (NEO4J_URI and NEO4J_USERNAME and NEO4J_PASSWORD):
+    raise ValueError("Neo4j credentials are not properly set in the environment.")
+
+# Initialize Neo4j driver
+driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD))
+
+# Verify Neo4j connectivity
+try:
+    with driver.session() as session:
+        driver.verify_connectivity()
+        print("Connected to Neo4j successfully!")
+except Exception as e:
+    print(f"Failed to connect to Neo4j: {e}")
+    driver.close()
+    exit()
+    
 
 # Function to generate Nomic embeddings using Nomic API
 def get_nomic_embedding(text):
-    # Generate the embeddings using Nomic Atlas
-    embedding = atlas.embed_text(text)  # Embed the text
-    return embedding[0]  # Return the first embedding
+    try:
+        # Generate the embeddings using Nomic API
+        response = embed.text(
+            texts=[text],  # Embed the text as a list
+            model="nomic-embed-text-v1.5",  # Specify the model name
+            task_type="search_query"  # Use appropriate task type
+        )
+        return response["embeddings"][0]  # Return the first embedding
+    except Exception as e:
+        raise ValueError(f"Error in generating embeddings: {str(e)}")
 
-# Example question to encode
+# Example query
 question = "give me a list of healthcare providers in the area of dermatology"
 
-# Generate Nomic embeddings for the question
-question_embedding = get_nomic_embedding(question)
 
-# Query the Neo4j database using Nomic embeddings
-result = kg.query(
-    """
-    CALL db.index.vector.queryNodes(
-        'health_providers_embeddings',
-        $top_k,
-        $question_embedding
-    ) YIELD node AS healthcare_provider, score
-    RETURN healthcare_provider.name, healthcare_provider.bio, score
-    """,
-    params={
-        "question_embedding": question_embedding,  # Use the generated Nomic embedding
-        "top_k": 3,
-    },
-)
+# Generate Nomic embeddings for the query
+try:
+    question_embedding = get_nomic_embedding(question)
+except ValueError as e:
+    print(e)
+    driver.close()
+    exit()
 
-# Print the results
-for record in result:
-    print(f"Name: {record['healthcare_provider.name']}")
-    print(f"Bio: {record['healthcare_provider.bio']}")
-    print(f"Score: {record['score']}")
-    print("---")
+
+# Query Neo4j database using Nomic embeddings
+def query_neo4j(embedding):
+    try:
+        with driver.session() as session:
+            result = session.run(
+                """
+                CALL db.index.vector.queryNodes(
+                    'health_providers_embeddings',
+                    $top_k,
+                    $question_embedding
+                ) YIELD node AS healthcare_provider, score
+                RETURN healthcare_provider.name, healthcare_provider.bio, score
+                """,
+                question_embedding=embedding,
+                top_k=3,  # Number of top results to retrieve
+            )
+            return result
+    except Exception as e:
+        print(f"Error querying Neo4j: {str(e)}")
+        driver.close()
+        exit()
+
+
+# Run Neo4j query and print results
+try:
+    result = query_neo4j(question_embedding)
+    for record in result:
+        print(f"Name: {record['healthcare_provider.name']}")
+        print(f"Bio: {record['healthcare_provider.bio']}")
+        print(f"Score: {record['score']}")
+        print("---")
+finally:
+    driver.close()  # Ensure the driver is closed
