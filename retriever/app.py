@@ -19,7 +19,7 @@ if not nomic_api_key:
     raise ValueError("NOMIC_API_KEY is not set. Please provide a valid Nomic API key.")
 
 # Neo4j credentials
-NEO4J_URI = os.getenv("NEO4J_URI", "neo4j+s://49cf5700.databases.neo4j.io")  # Default URI for the database
+NEO4J_URI = os.getenv("NEO4J_URI", "neo4j+s://d1cf7d0d.databases.neo4j.io")  # Default URI for the database
 NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "<Username>")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "<Password>")
 
